@@ -5,4 +5,3 @@ torchaudio>=2.0.0
 TTS>=0.20.0
 sounddevice>=0.4.0
 numpy>=1.21.0
-pyobjc-framework-AVFoundation>=9.0; sys_platform == 'darwin'

@@ -1,55 +1,38 @@
 """
 Interactive device selection for WaveSL.
 Presents arrow-key menus in the terminal for camera and audio output selection.
-A live camera preview confirms the correct device before the app starts.
+A live camera preview is the authoritative way to identify the correct device.
 """
 
 import curses
+import sys
 from typing import Optional
 
 import cv2
+
+# Sentinel returned by menus when the user presses q to quit
+_QUIT = -1
 
 
 # ──────────────────────────────────────────────
 # Device enumeration
 # ──────────────────────────────────────────────
 
-def _camera_names_macos() -> list[str]:
+def enumerate_cameras() -> list[tuple[int, int, int]]:
     """
-    Return camera display names in AVFoundation index order (matches OpenCV).
-    Uses PyObjC AVFoundation if available; falls back to empty list so the
-    caller shows generic labels instead of misleading mismatched names.
+    Probe OpenCV indices 0–9. Returns [(index, width, height), ...].
+    Names are intentionally omitted: on macOS the AVFoundation index order
+    differs from system_profiler order and cannot be reliably correlated
+    without ffmpeg. Use the live preview to identify the correct camera.
     """
-    try:
-        import AVFoundation
-        devices = AVFoundation.AVCaptureDevice.devicesWithMediaType_(
-            AVFoundation.AVMediaTypeVideo
-        )
-        return [d.localizedName() for d in devices]
-    except Exception:
-        return []
-
-
-def enumerate_cameras() -> list[tuple[int, str, int, int]]:
-    """
-    Probe OpenCV indices 0–9 and return available cameras as
-    [(index, name, width, height), ...].
-
-    Names come from system_profiler (best-effort label; the live preview
-    is the authoritative way to identify the correct device).
-    """
-    sys_names = _camera_names_macos()
-    cameras: list[tuple[int, str, int, int]] = []
-
+    cameras: list[tuple[int, int, int]] = []
     for i in range(10):
         cap = cv2.VideoCapture(i)
         if cap.isOpened():
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
-            name = sys_names[len(cameras)] if len(cameras) < len(sys_names) else f'Camera {i}'
-            cameras.append((i, name, w, h))
-
+            cameras.append((i, w, h))
     return cameras
 
 
@@ -70,41 +53,37 @@ def enumerate_audio_outputs() -> list[tuple[int, str]]:
 # Camera preview confirmation
 # ──────────────────────────────────────────────
 
-def confirm_camera(index: int, name: str) -> bool:
+def confirm_camera(index: int) -> bool:
     """
-    Open a live preview window for the given camera index.
-    Returns True if the user presses Enter (confirmed), False on Esc (go back).
+    Show a live preview window for the given camera index.
+    Returns True on Enter (confirmed), False on Esc (go back).
     """
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
         print(f'  Could not open camera {index}.')
         return False
 
-    window = 'WaveSL - Camera Preview'
     confirmed = False
-
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Draw name — black outline then white fill for readability on any background
-        for color, thickness in [((0, 0, 0), 4), ((255, 255, 255), 2)]:
-            cv2.putText(frame, name, (20, 48),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, thickness, cv2.LINE_AA)
-
-        # Draw instruction — black outline then yellow fill
+        label = f'Camera {index}'
         msg = 'ENTER = use this camera    ESC = go back'
+        for color, thickness in [((0, 0, 0), 4), ((255, 255, 255), 2)]:
+            cv2.putText(frame, label, (20, 48),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, thickness, cv2.LINE_AA)
         for color, thickness in [((0, 0, 0), 3), ((0, 220, 255), 2)]:
             cv2.putText(frame, msg, (20, 92),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.72, color, thickness, cv2.LINE_AA)
 
-        cv2.imshow(window, frame)
+        cv2.imshow('WaveSL - Camera Preview', frame)
         key = cv2.waitKey(30) & 0xFF
-        if key in (10, 13):   # Enter
+        if key in (10, 13):
             confirmed = True
             break
-        elif key == 27:        # Esc
+        elif key == 27:
             break
 
     cap.release()
@@ -113,11 +92,14 @@ def confirm_camera(index: int, name: str) -> bool:
 
 
 # ──────────────────────────────────────────────
-# Curses menu
+# Curses menu  (returns _QUIT on q)
 # ──────────────────────────────────────────────
 
 def _curses_menu(stdscr, title: str, options: list[str]) -> int:
-    """Arrow-key curses menu. Returns the index of the selected option."""
+    """
+    Arrow-key curses menu.
+    Returns the selected index, or _QUIT if the user presses q.
+    """
     curses.curs_set(0)
     current = 0
 
@@ -138,8 +120,7 @@ def _curses_menu(stdscr, title: str, options: list[str]) -> int:
             else:
                 stdscr.addstr(y, 0, f'  {opt}'[:w - 1])
 
-        hint = 'UP/DOWN: navigate   ENTER: select'
-        stdscr.addstr(h - 1, 0, hint[:w - 1])
+        stdscr.addstr(h - 1, 0, 'UP/DOWN: navigate   ENTER: select   q: quit'[:w - 1])
         stdscr.refresh()
 
         key = stdscr.getch()
@@ -149,6 +130,8 @@ def _curses_menu(stdscr, title: str, options: list[str]) -> int:
             current += 1
         elif key in (curses.KEY_ENTER, 10, 13):
             return current
+        elif key in (ord('q'), ord('Q')):
+            return _QUIT
 
 
 def _fallback_menu(title: str, options: list[str]) -> int:
@@ -156,14 +139,18 @@ def _fallback_menu(title: str, options: list[str]) -> int:
     print(f'\n{title}')
     for i, opt in enumerate(options):
         print(f'  [{i}] {opt}')
+    print('  [q] Quit')
     while True:
+        raw = input('Enter number (or q): ').strip().lower()
+        if raw == 'q':
+            return _QUIT
         try:
-            val = int(input('Enter number: ').strip())
+            val = int(raw)
             if 0 <= val < len(options):
                 return val
-        except (ValueError, EOFError):
+        except ValueError:
             pass
-        print(f'  Enter a number between 0 and {len(options) - 1}.')
+        print(f'  Enter a number between 0 and {len(options) - 1}, or q to quit.')
 
 
 def _select(title: str, options: list[str]) -> int:
@@ -175,54 +162,54 @@ def _select(title: str, options: list[str]) -> int:
 
 
 # ──────────────────────────────────────────────
-# Main entry point
+# Public selection functions
 # ──────────────────────────────────────────────
 
 def select_camera() -> int:
     """
-    Show interactive camera selection only.
-    Returns the confirmed camera index.
+    Interactive camera-only selection.
+    Returns the confirmed camera index, or exits the process if the user quits.
     """
     cameras = enumerate_cameras()
     if not cameras:
         print('No cameras detected — defaulting to index 0.')
         return 0
 
-    camera_index: Optional[int] = None
-    while camera_index is None:
-        cam_labels = [f'{name}  ({w}x{h})' for _, name, w, h in cameras]
+    while True:
+        cam_labels = [f'Camera {i}  ({w}x{h})' for i, w, h in cameras]
         chosen = _select('Select camera input:', cam_labels)
-        idx, name, _, _ = cameras[chosen]
-        if confirm_camera(idx, name):
-            camera_index = idx
-
-    return camera_index
+        if chosen == _QUIT:
+            sys.exit(0)
+        idx, _, _ = cameras[chosen]
+        if confirm_camera(idx):
+            return idx
 
 
 def run_device_selection() -> tuple[int, Optional[str]]:
     """
-    Show interactive camera and audio output selection menus.
-    Returns (camera_index, audio_device_name_or_None).
+    Interactive camera + audio output selection.
+    Returns (camera_index, audio_device_name_or_None), or exits on quit.
     """
     cameras = enumerate_cameras()
     if not cameras:
         print('No cameras detected — defaulting to index 0.')
-        return 0, None
+        camera_index = 0
+    else:
+        while True:
+            cam_labels = [f'Camera {i}  ({w}x{h})' for i, w, h in cameras]
+            chosen = _select('Select camera input:', cam_labels)
+            if chosen == _QUIT:
+                sys.exit(0)
+            idx, _, _ = cameras[chosen]
+            if confirm_camera(idx):
+                camera_index = idx
+                break
 
     audio_outputs = enumerate_audio_outputs()
-
-    # Camera selection — loop until the user confirms the preview
-    camera_index: Optional[int] = None
-    while camera_index is None:
-        cam_labels = [f'{name}  ({w}x{h})' for _, name, w, h in cameras]
-        chosen = _select('Select camera input:', cam_labels)
-        idx, name, _, _ = cameras[chosen]
-        if confirm_camera(idx, name):
-            camera_index = idx
-
-    # Audio output selection
     audio_labels = ['Default (system output)'] + [name for _, name in audio_outputs]
     chosen = _select('Select audio output:', audio_labels)
+    if chosen == _QUIT:
+        sys.exit(0)
     audio_device = None if chosen == 0 else audio_outputs[chosen - 1][1]
 
     return camera_index, audio_device
