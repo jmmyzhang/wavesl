@@ -20,7 +20,6 @@ class TTSEngine:
         """
         self.model_name = model_name
         self.model = None
-        self.vocoder = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         self._load_model()

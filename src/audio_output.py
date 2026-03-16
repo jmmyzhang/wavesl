@@ -45,6 +45,7 @@ class AudioOutput:
             print("Using default audio output device")
         
         # Audio stream
+        self.blocksize = 1024  # Samples per callback invocation; chunk_size in play() must match
         self.stream = None
         self.audio_queue = queue.Queue()
         
@@ -60,7 +61,7 @@ class AudioOutput:
                 channels=1,  # Mono
                 dtype=np.float32,
                 callback=self._audio_callback,
-                blocksize=1024
+                blocksize=self.blocksize
             )
             self.stream.start()
             print("Audio output stream started")
@@ -115,8 +116,9 @@ class AudioOutput:
         if max_val > 1.0:
             audio_data = audio_data / max_val
         
-        # Split audio into chunks and add to queue
-        chunk_size = 4096  # Process in chunks
+        # Split into chunks matching blocksize so the callback consumes exactly
+        # one chunk per invocation without truncation or padding
+        chunk_size = self.blocksize
         for i in range(0, len(audio_data), chunk_size):
             chunk = audio_data[i:i + chunk_size]
             try:

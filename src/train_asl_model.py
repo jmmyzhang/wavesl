@@ -14,9 +14,11 @@ import mediapipe as mp
 import os
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 from tqdm import tqdm
 import argparse
+
+from constants import EXPECTED_FEATURE_SIZE
 
 
 class ASLDataset(Dataset):
@@ -60,7 +62,14 @@ class ASLDataset(Dataset):
         
         if features is None or len(features) == 0:
             # Return dummy features if video loading fails
-            features = np.zeros((63,), dtype=np.float32)  # Default feature size
+            features = np.zeros((EXPECTED_FEATURE_SIZE,), dtype=np.float32)
+        elif len(features) != EXPECTED_FEATURE_SIZE:
+            if len(features) < EXPECTED_FEATURE_SIZE:
+                padded = np.zeros((EXPECTED_FEATURE_SIZE,), dtype=np.float32)
+                padded[: len(features)] = features
+                features = padded
+            else:
+                features = features[:EXPECTED_FEATURE_SIZE]
         
         return torch.FloatTensor(features), torch.LongTensor([label])[0]
     

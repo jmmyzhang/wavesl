@@ -9,67 +9,87 @@ import json
 import shutil
 from pathlib import Path
 import argparse
-import requests
 from tqdm import tqdm
-import zipfile
-
-
-def download_file(url: str, output_path: Path, chunk_size: int = 8192):
-    """Download a file with progress bar"""
-    response = requests.get(url, stream=True)
-    total_size = int(response.headers.get('content-length', 0))
-    
-    with open(output_path, 'wb') as f, tqdm(
-        desc=output_path.name,
-        total=total_size,
-        unit='B',
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
-        for chunk in response.iter_content(chunk_size=chunk_size):
-            if chunk:
-                f.write(chunk)
-                bar.update(len(chunk))
 
 
 def organize_wlasl_videos(wlasl_dir: Path, output_dir: Path, class_mapping_file: Path = None):
     """
     Organize WLASL videos into class directories
     
-    WLASL structure is typically:
-    - videos/ directory with all videos
-    - JSON file with annotations mapping video names to glosses (sign names)
+    WLASL structure can be:
+    - videos/ directory with all videos (after preprocessing)
+    - start_kit/videos/ directory
+    - start_kit/raw_videos/ directory
+    - JSON file with annotations (WLASL_v0.3.json format)
     """
-    videos_dir = wlasl_dir / 'videos'
-    if not videos_dir.exists():
-        print(f"Error: {videos_dir} not found")
-        print("Expected WLASL structure: wlasl_root/videos/")
+    # Try multiple possible video locations
+    possible_video_dirs = [
+        wlasl_dir / 'videos',
+        wlasl_dir / 'start_kit' / 'videos',
+        wlasl_dir / 'start_kit' / 'raw_videos',
+    ]
+    
+    videos_dir = None
+    for vdir in possible_video_dirs:
+        if vdir.exists():
+            videos_dir = vdir
+            break
+    
+    if not videos_dir:
+        print(f"Error: No videos directory found in {wlasl_dir}")
+        print("Expected one of:")
+        for vdir in possible_video_dirs:
+            print(f"  - {vdir}")
+        print("\nTo download videos, see WLASL README.md or run:")
+        print("  cd start_kit && python video_downloader.py && python preprocess.py")
         return None
     
-    # Try to find annotation file
-    annotation_files = list(wlasl_dir.glob('*.json'))
-    if not annotation_files:
-        print("Warning: No JSON annotation file found")
-        print("You may need to download WLASL annotations separately")
+    print(f"Found videos directory: {videos_dir}")
+    
+    # Try to find annotation file (WLASL format)
+    # Prefer filtered subsets (WLASL-100, etc.) if they exist
+    annotation_files = [
+        wlasl_dir / 'start_kit' / 'WLASL_v0.3_100.json',  # WLASL-100 subset
+        wlasl_dir / 'start_kit' / 'WLASL_v0.3_300.json',  # WLASL-300 subset
+        wlasl_dir / 'start_kit' / 'WLASL_v0.3.json',      # Full dataset
+        wlasl_dir / 'WLASL_v0.3.json',
+    ] + list(wlasl_dir.glob('**/WLASL_v*.json'))
+    
+    ann_file = None
+    for af in annotation_files:
+        if af.exists():
+            ann_file = af
+            break
+    
+    if not ann_file:
+        print("Warning: No WLASL annotation JSON file found")
+        print("Expected: start_kit/WLASL_v0.3.json")
         return None
     
-    # Load annotations
-    annotations = {}
-    for ann_file in annotation_files:
-        try:
-            with open(ann_file, 'r') as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    for item in data:
-                        if 'gloss' in item and 'video_id' in item:
-                            annotations[item['video_id']] = item['gloss']
-                elif isinstance(data, dict):
-                    annotations.update(data)
-        except Exception as e:
-            print(f"Warning: Could not parse {ann_file}: {e}")
+    print(f"Found annotation file: {ann_file}")
+    
+    # Load WLASL JSON format
+    # Format: [{"gloss": "book", "instances": [{"video_id": "69241", ...}, ...]}, ...]
+    annotations = {}  # video_id -> gloss
+    try:
+        with open(ann_file, 'r') as f:
+            data = json.load(f)
+        
+        if isinstance(data, list):
+            for gloss_entry in data:
+                gloss = gloss_entry.get('gloss', '')
+                instances = gloss_entry.get('instances', [])
+                for instance in instances:
+                    video_id = instance.get('video_id', '')
+                    if video_id and gloss:
+                        annotations[video_id] = gloss
+        print(f"Loaded {len(annotations)} video annotations for {len(set(annotations.values()))} unique glosses")
+    except Exception as e:
+        print(f"Error parsing annotation file: {e}")
+        return None
     
     if not annotations:
-        print("Error: No annotations found in JSON files")
+        print("Error: No annotations found in JSON file")
         return None
     
     # Create output directory structure
@@ -77,10 +97,15 @@ def organize_wlasl_videos(wlasl_dir: Path, output_dir: Path, class_mapping_file:
     
     # Organize videos by gloss (sign name)
     video_files = list(videos_dir.glob('*.mp4'))
+    if not video_files:
+        # Try subdirectories
+        video_files = list(videos_dir.rglob('*.mp4'))
+    
     organized = 0
     missing_annotations = []
     
-    print(f"Organizing {len(video_files)} videos...")
+    print(f"Found {len(video_files)} video files")
+    print(f"Organizing videos into {len(set(annotations.values()))} sign classes...")
     
     for video_file in tqdm(video_files, desc="Organizing videos"):
         # Extract video ID from filename (WLASL format: video_id.mp4)
@@ -89,7 +114,7 @@ def organize_wlasl_videos(wlasl_dir: Path, output_dir: Path, class_mapping_file:
         if video_id in annotations:
             gloss = annotations[video_id]
             # Sanitize gloss name for directory
-            gloss_dir = output_dir / gloss.replace(' ', '_').replace('/', '_')
+            gloss_dir = output_dir / gloss.replace(' ', '_').replace('/', '_').replace('\\', '_')
             gloss_dir.mkdir(exist_ok=True)
             
             # Copy video to appropriate directory

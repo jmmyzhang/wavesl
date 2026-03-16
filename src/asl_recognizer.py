@@ -12,6 +12,8 @@ import torch.nn as nn
 import json
 from pathlib import Path
 
+from constants import EXPECTED_FEATURE_SIZE
+
 
 class ASLModel(nn.Module):
     """Neural network model for ASL sign recognition (matches training architecture)"""
@@ -53,8 +55,6 @@ class ASLRecognizer:
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
-        self.mp_drawing = mp.solutions.drawing_utils
-        
         # Initialize PyTorch model
         self.model = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -94,7 +94,7 @@ class ASLRecognizer:
             # Load model
             # Try loading as state dict first (for models trained with train_asl_model.py)
             try:
-                state_dict = torch.load(model_path, map_location=self.device)
+                state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
                 
                 # Determine model architecture from class mapping or state dict
                 if self.class_mapping:
@@ -145,7 +145,6 @@ class ASLRecognizer:
                     print("  Using placeholder recognition (no model loaded)")
                     print("  To use a trained model, train one first:")
                     print("    ./train_wlasl_model.sh")
-                    print("  Or see SETUP_WLASL.md for instructions")
         except Exception as e:
             print(f"Error loading model: {e}")
             print("Using placeholder recognition")
@@ -162,10 +161,7 @@ class ASLRecognizer:
             Feature vector
         """
         features = []
-        
-        # Get image dimensions
-        h, w = frame.shape[:2]
-        
+
         # Extract normalized landmark coordinates
         for landmark in hand_landmarks.landmark:
             features.extend([landmark.x, landmark.y, landmark.z])
@@ -207,17 +203,15 @@ class ASLRecognizer:
             # Prepare input tensor
             features_tensor = torch.FloatTensor(features).unsqueeze(0).to(self.device)
             
-            # Run inference
             with torch.no_grad():
                 output = self.model(features_tensor)
-                # Assuming model outputs class probabilities or logits
-                # You'll need to adapt this based on your model's output format
-                predicted_class = torch.argmax(output, dim=1).item()
-                
-                # Map class index to sign text
-                # You'll need to implement this mapping based on your model
-                sign_text = self._class_to_text(predicted_class)
-                
+                probs = torch.softmax(output, dim=1)
+                confidence, predicted_class = torch.max(probs, dim=1)
+
+                if confidence.item() < 0.6:
+                    return None
+
+                sign_text = self._class_to_text(predicted_class.item())
                 return sign_text
         except Exception as e:
             print(f"Error in sign recognition: {e}")
@@ -269,11 +263,18 @@ class ASLRecognizer:
             if len(all_features) == 1:
                 combined_features = all_features[0]
             elif len(all_features) == 2:
-                # Concatenate features from both hands
                 combined_features = np.concatenate(all_features)
             else:
                 return None
-            
+
+            # Pad or truncate to the fixed size the model expects
+            if len(combined_features) < EXPECTED_FEATURE_SIZE:
+                padded = np.zeros(EXPECTED_FEATURE_SIZE, dtype=np.float32)
+                padded[:len(combined_features)] = combined_features
+                combined_features = padded
+            elif len(combined_features) > EXPECTED_FEATURE_SIZE:
+                combined_features = combined_features[:EXPECTED_FEATURE_SIZE]
+
             # Recognize sign
             text = self.recognize_sign(combined_features)
             
