@@ -5,8 +5,6 @@ A live camera preview confirms the correct device before the app starts.
 """
 
 import curses
-import json
-import subprocess
 from typing import Optional
 
 import cv2
@@ -18,16 +16,16 @@ import cv2
 
 def _camera_names_macos() -> list[str]:
     """
-    Fetch camera display names from macOS system_profiler.
-    Order may not match OpenCV indices — used as labels only.
+    Return camera display names in AVFoundation index order (matches OpenCV).
+    Uses PyObjC AVFoundation if available; falls back to empty list so the
+    caller shows generic labels instead of misleading mismatched names.
     """
     try:
-        result = subprocess.run(
-            ['system_profiler', 'SPCameraDataType', '-json'],
-            capture_output=True, text=True, timeout=5
+        import AVFoundation
+        devices = AVFoundation.AVCaptureDevice.devicesWithMediaType_(
+            AVFoundation.AVMediaTypeVideo
         )
-        data = json.loads(result.stdout)
-        return [cam.get('_name', '') for cam in data.get('SPCameraDataType', [])]
+        return [d.localizedName() for d in devices]
     except Exception:
         return []
 
