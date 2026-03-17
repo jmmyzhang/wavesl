@@ -5,17 +5,30 @@ Phase 2, Step 5: Model inference with confidence threshold
 """
 
 import argparse
+import contextlib
 import json
 import os
 from pathlib import Path
 from typing import Optional
 
-# Suppress verbose MediaPipe/TensorFlow Lite internal warnings
-os.environ.setdefault('GLOG_minloglevel', '2')
-os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
+
+@contextlib.contextmanager
+def _suppress_c_stderr():
+    """Redirect fd 2 to /dev/null to silence C-level warnings (e.g. MediaPipe glog)."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    saved = os.dup(2)
+    os.dup2(devnull, 2)
+    try:
+        yield
+    finally:
+        os.dup2(saved, 2)
+        os.close(devnull)
+        os.close(saved)
+
 
 import cv2
-import mediapipe as mp
+with _suppress_c_stderr():
+    import mediapipe as mp
 import numpy as np
 import torch
 import torch.nn as nn
@@ -107,10 +120,12 @@ def extract_features(hand_landmarks_list: list) -> np.ndarray:
 
 def infer(model: ASLModel, features: np.ndarray,
           reverse_mapping: dict[int, str],
-          device: torch.device) -> Optional[tuple[str, float]]:
+          device: torch.device,
+          threshold: float = CONFIDENCE_THRESHOLD) -> tuple[str, float, bool]:
     """
     Run one inference pass.
-    Returns (label, confidence) if confidence >= threshold, else None.
+    Returns (label, confidence, above_threshold).
+    Always returns the top prediction so callers can inspect raw output.
     """
     tensor = torch.from_numpy(features).unsqueeze(0).to(device)
     with torch.no_grad():
@@ -118,16 +133,14 @@ def infer(model: ASLModel, features: np.ndarray,
         confidence, class_idx = torch.max(probs, dim=1)
 
     conf = confidence.item()
-    if conf < CONFIDENCE_THRESHOLD:
-        return None
-
     label = reverse_mapping.get(class_idx.item(), str(class_idx.item()))
-    return label, conf
+    return label, conf, conf >= threshold
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-def run(camera_index: int, model_path: Optional[str]) -> None:
+def run(camera_index: int, model_path: Optional[str],
+        threshold: float = CONFIDENCE_THRESHOLD) -> None:
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         raise RuntimeError(f'Could not open camera {camera_index}')
@@ -177,12 +190,9 @@ def run(camera_index: int, model_path: Optional[str]) -> None:
             features = extract_features(results.multi_hand_landmarks)
 
             if model is not None:
-                result = infer(model, features, reverse_mapping, device)
-                if result:
-                    label, conf = result
-                    print(f'\r{label}  ({conf:.0%})', end='', flush=True)
-                else:
-                    print(f'\r{"":30}', end='', flush=True)
+                label, conf, above = infer(model, features, reverse_mapping, device, threshold)
+                marker = '✓' if above else '?'
+                print(f'\r{marker} {label:<12} {conf:.0%}   ', end='', flush=True)
 
         cv2.imshow('WaveSL', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -200,10 +210,12 @@ def main() -> None:
                         help='Camera index (skips interactive selection)')
     parser.add_argument('--model', type=str, default=None,
                         help='Path to trained .pt model file')
+    parser.add_argument('--threshold', type=float, default=CONFIDENCE_THRESHOLD,
+                        help=f'Confidence threshold (default: {CONFIDENCE_THRESHOLD})')
     args = parser.parse_args()
 
     camera_index = args.camera if args.camera is not None else select_camera()
-    run(camera_index, args.model)
+    run(camera_index, args.model, args.threshold)
 
 
 if __name__ == '__main__':
