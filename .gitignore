@@ -209,10 +209,14 @@ __marimo__/
 
 # data/models 
 data/models/
-models/
+# Note: models/wlasl/best_model.pt is tracked via Git LFS (see .gitattributes)
+# Ignore other model files and training outputs
+models/*/final_model.pt
+models/*/checkpoints/
+models/*/logs/
 *.h5
 *.pth
-*.pt
+# *.pt is handled by .gitattributes (Git LFS) for models/wlasl/
 
 # WLASL dataset (large video files)
 dataset/

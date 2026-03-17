@@ -214,8 +214,17 @@ def main() -> None:
                         help=f'Confidence threshold (default: {CONFIDENCE_THRESHOLD})')
     args = parser.parse_args()
 
+    model_path = args.model
+    if model_path is None:
+        default = Path(__file__).parent.parent / 'models' / 'wlasl' / 'best_model.pt'
+        if default.exists():
+            model_path = str(default)
+        else:
+            print(f'Warning: no model found at {default}')
+            print('Run train_wlasl_model.sh to train one, or pass --model <path>')
+
     camera_index = args.camera if args.camera is not None else select_camera()
-    run(camera_index, args.model, args.threshold)
+    run(camera_index, model_path, args.threshold)
 
 
 if __name__ == '__main__':

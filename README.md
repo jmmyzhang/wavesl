@@ -131,26 +131,41 @@ python src/main.py --list-audio
 
 WaveSL uses a **pre-trained model** based on the WLASL (Word-Level American Sign Language) dataset. The model is trained **once** and then used for inference - no training happens when you run the application.
 
-#### Quick Start (If Model Already Trained)
+#### Quick Start
 
-If you already have a trained model:
+The repository includes a pre-trained WLASL model, so you can run immediately:
 
 ```bash
-# The app will automatically find models/wlasl/best_model.pt
+# Clone the repository
+git clone <repo-url>
+cd wavesl
+
+# Install dependencies
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Run the application (uses included pre-trained model)
 python src/main.py
 ```
 
-#### First-Time Setup: Train the Model
+**Note**: If the model file is large, you may need Git LFS:
+```bash
+git lfs install
+git lfs pull  # Download the model file
+```
 
-**You only need to do this once!** After training, the model is saved and ready to use.
+#### Training Your Own Model (Optional)
+
+A pre-trained model is included in the repository. If you want to train your own model or use a different vocabulary size:
 
 See **[SETUP_WLASL.md](SETUP_WLASL.md)** for complete setup instructions.
 
 Quick summary:
 1. **Download WLASL dataset** from [WLASL repository](https://github.com/dxli94/WLASL)
 2. **Prepare dataset**: `python src/prepare_wlasl.py --wlasl-dir ~/wlasl --output-dir dataset/wlasl`
-3. **Train model** (one time): `./train_wlasl_model.sh`
-4. **Use pre-trained model**: `python src/main.py` (no training needed!)
+3. **Train model**: `./train_wlasl_model.sh`
+4. **Use your trained model**: `python src/main.py` (will use your model if it exists)
 
 #### Model Details
 
