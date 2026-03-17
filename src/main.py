@@ -6,8 +6,13 @@ Phase 2, Step 5: Model inference with confidence threshold
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Optional
+
+# Suppress verbose MediaPipe/TensorFlow Lite internal warnings
+os.environ.setdefault('GLOG_minloglevel', '2')
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
 
 import cv2
 import mediapipe as mp
