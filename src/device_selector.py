@@ -5,22 +5,26 @@ A live camera preview is the authoritative way to identify the correct device.
 """
 
 import curses
+import logging
 import sys
 from typing import Optional
 
 import cv2
 
+logger = logging.getLogger(__name__)
+
 # Sentinel returned by menus when the user presses q to quit
 _QUIT = -1
 
 
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Device enumeration
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+
 
 def enumerate_cameras() -> list[tuple[int, int, int]]:
     """
-    Probe OpenCV indices 0–9. Returns [(index, width, height), ...].
+    Probe OpenCV indices 0-9. Returns [(index, width, height), ...].
     Names are intentionally omitted: on macOS the AVFoundation index order
     differs from system_profiler order and cannot be reliably correlated
     without ffmpeg. Use the live preview to identify the correct camera.
@@ -40,18 +44,21 @@ def enumerate_audio_outputs() -> list[tuple[int, str]]:
     """Return [(device_id, name), ...] for all audio output-capable devices."""
     try:
         import sounddevice as sd
+
         return [
-            (i, d['name'])
+            (i, d["name"])
             for i, d in enumerate(sd.query_devices())
-            if d['max_output_channels'] > 0
+            if d["max_output_channels"] > 0
         ]
-    except Exception:
+    except Exception as e:
+        logger.warning("Could not enumerate audio outputs: %s", e)
         return []
 
 
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Camera preview confirmation
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+
 
 def confirm_camera(index: int) -> bool:
     """
@@ -60,7 +67,7 @@ def confirm_camera(index: int) -> bool:
     """
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
-        print(f'  Could not open camera {index}.')
+        print(f"  Could not open camera {index}.")
         return False
 
     confirmed = False
@@ -69,16 +76,32 @@ def confirm_camera(index: int) -> bool:
         if not ret:
             break
 
-        label = f'Camera {index}'
-        msg = 'ENTER = use this camera    ESC = go back'
+        label = f"Camera {index}"
+        msg = "ENTER = use this camera    ESC = go back"
         for color, thickness in [((0, 0, 0), 4), ((255, 255, 255), 2)]:
-            cv2.putText(frame, label, (20, 48),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, thickness, cv2.LINE_AA)
+            cv2.putText(
+                frame,
+                label,
+                (20, 48),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.1,
+                color,
+                thickness,
+                cv2.LINE_AA,
+            )
         for color, thickness in [((0, 0, 0), 3), ((0, 220, 255), 2)]:
-            cv2.putText(frame, msg, (20, 92),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.72, color, thickness, cv2.LINE_AA)
+            cv2.putText(
+                frame,
+                msg,
+                (20, 92),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.72,
+                color,
+                thickness,
+                cv2.LINE_AA,
+            )
 
-        cv2.imshow('WaveSL - Camera Preview', frame)
+        cv2.imshow("WaveSL - Camera Preview", frame)
         key = cv2.waitKey(30) & 0xFF
         if key in (10, 13):
             confirmed = True
@@ -91,9 +114,10 @@ def confirm_camera(index: int) -> bool:
     return confirmed
 
 
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Curses menu  (returns _QUIT on q)
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+
 
 def _curses_menu(stdscr, title: str, options: list[str]) -> int:
     """
@@ -108,19 +132,19 @@ def _curses_menu(stdscr, title: str, options: list[str]) -> int:
         h, w = stdscr.getmaxyx()
 
         stdscr.addstr(0, 0, title, curses.A_BOLD)
-        stdscr.addstr(1, 0, '-' * min(w - 1, 60))
+        stdscr.addstr(1, 0, "-" * min(w - 1, 60))
 
         for i, opt in enumerate(options):
             y = i + 3
             if y >= h - 2:
                 break
             if i == current:
-                stdscr.addstr(y, 0, '>', curses.A_BOLD)
-                stdscr.addstr(y, 2, opt[:w - 3], curses.A_REVERSE)
+                stdscr.addstr(y, 0, ">", curses.A_BOLD)
+                stdscr.addstr(y, 2, opt[: w - 3], curses.A_REVERSE)
             else:
-                stdscr.addstr(y, 0, f'  {opt}'[:w - 1])
+                stdscr.addstr(y, 0, f"  {opt}"[: w - 1])
 
-        stdscr.addstr(h - 1, 0, 'UP/DOWN: navigate   ENTER: select   q: quit'[:w - 1])
+        stdscr.addstr(h - 1, 0, "UP/DOWN: navigate   ENTER: select   q: quit"[: w - 1])
         stdscr.refresh()
 
         key = stdscr.getch()
@@ -130,19 +154,19 @@ def _curses_menu(stdscr, title: str, options: list[str]) -> int:
             current += 1
         elif key in (curses.KEY_ENTER, 10, 13):
             return current
-        elif key in (ord('q'), ord('Q')):
+        elif key in (ord("q"), ord("Q")):
             return _QUIT
 
 
 def _fallback_menu(title: str, options: list[str]) -> int:
     """Numbered fallback if curses is unavailable (e.g. IDE terminal)."""
-    print(f'\n{title}')
+    print(f"\n{title}")
     for i, opt in enumerate(options):
-        print(f'  [{i}] {opt}')
-    print('  [q] Quit')
+        print(f"  [{i}] {opt}")
+    print("  [q] Quit")
     while True:
-        raw = input('Enter number (or q): ').strip().lower()
-        if raw == 'q':
+        raw = input("Enter number (or q): ").strip().lower()
+        if raw == "q":
             return _QUIT
         try:
             val = int(raw)
@@ -150,20 +174,22 @@ def _fallback_menu(title: str, options: list[str]) -> int:
                 return val
         except ValueError:
             pass
-        print(f'  Enter a number between 0 and {len(options) - 1}, or q to quit.')
+        print(f"  Enter a number between 0 and {len(options) - 1}, or q to quit.")
 
 
 def _select(title: str, options: list[str]) -> int:
     """Run curses menu, falling back to numbered input on failure."""
     try:
         return curses.wrapper(_curses_menu, title, options)
-    except Exception:
+    except Exception as e:
+        logger.debug("curses unavailable (%s), using fallback menu", e)
         return _fallback_menu(title, options)
 
 
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 # Public selection functions
-# ──────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+
 
 def select_camera() -> int:
     """
@@ -172,12 +198,12 @@ def select_camera() -> int:
     """
     cameras = enumerate_cameras()
     if not cameras:
-        print('No cameras detected — defaulting to index 0.')
+        print("No cameras detected -- defaulting to index 0.")
         return 0
 
     while True:
-        cam_labels = [f'Camera {i}  ({w}x{h})' for i, w, h in cameras]
-        chosen = _select('Select camera input:', cam_labels)
+        cam_labels = [f"Camera {i}  ({w}x{h})" for i, w, h in cameras]
+        chosen = _select("Select camera input:", cam_labels)
         if chosen == _QUIT:
             sys.exit(0)
         idx, _, _ = cameras[chosen]
@@ -192,12 +218,12 @@ def run_device_selection() -> tuple[int, Optional[str]]:
     """
     cameras = enumerate_cameras()
     if not cameras:
-        print('No cameras detected — defaulting to index 0.')
+        print("No cameras detected -- defaulting to index 0.")
         camera_index = 0
     else:
         while True:
-            cam_labels = [f'Camera {i}  ({w}x{h})' for i, w, h in cameras]
-            chosen = _select('Select camera input:', cam_labels)
+            cam_labels = [f"Camera {i}  ({w}x{h})" for i, w, h in cameras]
+            chosen = _select("Select camera input:", cam_labels)
             if chosen == _QUIT:
                 sys.exit(0)
             idx, _, _ = cameras[chosen]
@@ -206,8 +232,8 @@ def run_device_selection() -> tuple[int, Optional[str]]:
                 break
 
     audio_outputs = enumerate_audio_outputs()
-    audio_labels = ['Default (system output)'] + [name for _, name in audio_outputs]
-    chosen = _select('Select audio output:', audio_labels)
+    audio_labels = ["Default (system output)"] + [name for _, name in audio_outputs]
+    chosen = _select("Select audio output:", audio_labels)
     if chosen == _QUIT:
         sys.exit(0)
     audio_device = None if chosen == 0 else audio_outputs[chosen - 1][1]

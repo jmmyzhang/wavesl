@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source /Users/jimmyzhang/repos/wavesl/venv/bin/activate)",
+      "Bash(python -m ruff check /Users/jimmyzhang/repos/wavesl/src/ /Users/jimmyzhang/repos/wavesl/tests/)",
+      "Bash(python -m black --check /Users/jimmyzhang/repos/wavesl/src/ /Users/jimmyzhang/repos/wavesl/tests/)",
+      "Bash(python -m pytest /Users/jimmyzhang/repos/wavesl/tests/ -v)"
+    ]
+  }
+}

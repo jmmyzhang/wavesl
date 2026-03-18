@@ -6,28 +6,16 @@ Phase 2, Step 6: Temporal smoothing with majority-vote buffer
 
 import argparse
 import contextlib
+import logging
 import os
 from pathlib import Path
 from typing import Optional
 
-
-@contextlib.contextmanager
-def _suppress_c_stderr():
-    """Redirect fd 2 to /dev/null to silence C-level warnings (e.g. MediaPipe glog)."""
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    saved = os.dup(2)
-    os.dup2(devnull, 2)
-    try:
-        yield
-    finally:
-        os.dup2(saved, 2)
-        os.close(devnull)
-        os.close(saved)
-
-
 import cv2
-with _suppress_c_stderr():
+
+with contextlib.redirect_stderr(open(os.devnull, "w")):
     import mediapipe as mp
+
 import numpy as np
 import torch
 
@@ -36,11 +24,14 @@ from device_selector import select_camera
 from model import ASLModel, load_model
 from prediction_smoother import PredictionSmoother
 
+logger = logging.getLogger(__name__)
+
 _FINGERTIPS = [4, 8, 12, 16, 20]
 CONFIDENCE_THRESHOLD = 0.6
 
 
-# ── Feature extraction ────────────────────────────────────────────────────────
+# -- Feature extraction -------------------------------------------------------
+
 
 def extract_features(hand_landmarks_list: list) -> np.ndarray:
     features: list[float] = []
@@ -51,9 +42,11 @@ def extract_features(hand_landmarks_list: list) -> np.ndarray:
         for i in range(len(_FINGERTIPS)):
             for j in range(i + 1, len(_FINGERTIPS)):
                 a, b = lms[_FINGERTIPS[i]], lms[_FINGERTIPS[j]]
-                features.append(float(
-                    np.sqrt((a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2)
-                ))
+                features.append(
+                    float(
+                        np.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
+                    )
+                )
     vec = np.array(features, dtype=np.float32)
     if len(vec) < EXPECTED_FEATURE_SIZE:
         vec = np.pad(vec, (0, EXPECTED_FEATURE_SIZE - len(vec)))
@@ -62,12 +55,16 @@ def extract_features(hand_landmarks_list: list) -> np.ndarray:
     return vec
 
 
-# ── Inference ─────────────────────────────────────────────────────────────────
+# -- Inference ----------------------------------------------------------------
 
-def infer(model: ASLModel, features: np.ndarray,
-          reverse_mapping: dict[int, str],
-          device: torch.device,
-          threshold: float = CONFIDENCE_THRESHOLD) -> tuple[str, float, bool]:
+
+def infer(
+    model: ASLModel,
+    features: np.ndarray,
+    reverse_mapping: dict[int, str],
+    device: torch.device,
+    threshold: float = CONFIDENCE_THRESHOLD,
+) -> tuple[str, float, bool]:
     """
     Run one inference pass.
     Returns (label, confidence, above_threshold).
@@ -78,18 +75,23 @@ def infer(model: ASLModel, features: np.ndarray,
         probs = torch.softmax(model(tensor), dim=1)
         confidence, class_idx = torch.max(probs, dim=1)
 
-    conf = confidence.item()
-    label = reverse_mapping.get(class_idx.item(), str(class_idx.item()))
+    conf = float(confidence.item())
+    idx = int(class_idx.item())
+    label = reverse_mapping.get(idx, str(idx))
     return label, conf, conf >= threshold
 
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# -- Main loop ----------------------------------------------------------------
 
-def run(camera_index: int, model_path: Optional[str],
-        threshold: float = CONFIDENCE_THRESHOLD) -> None:
+
+def run(
+    camera_index: int,
+    model_path: Optional[str],
+    threshold: float = CONFIDENCE_THRESHOLD,
+) -> None:
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
-        raise RuntimeError(f'Could not open camera {camera_index}')
+        raise RuntimeError(f"Could not open camera {camera_index}")
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -106,19 +108,19 @@ def run(camera_index: int, model_path: Optional[str],
         min_tracking_confidence=0.5,
     )
 
-    model, reverse_mapping, device = (None, {}, torch.device('cpu'))
+    model, reverse_mapping, device = (None, {}, torch.device("cpu"))
     if model_path:
         model, reverse_mapping, device = load_model(model_path)
     else:
-        print('No model provided — running feature extraction only')
+        print("No model provided -- running feature extraction only")
 
     smoother = PredictionSmoother()
-    print('Camera feed open — press q to quit')
+    print("Camera feed open -- press q to quit")
 
     while True:
         ret, frame = cap.read()
         if not ret:
-            print('Warning: failed to read frame')
+            logger.warning("failed to read frame")
             continue
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -137,17 +139,25 @@ def run(camera_index: int, model_path: Optional[str],
             features = extract_features(results.multi_hand_landmarks)
 
             if model is not None:
-                label, conf, above = infer(model, features, reverse_mapping, device, threshold)
-                marker = '✓' if above else '?'
+                label, conf, above = infer(
+                    model, features, reverse_mapping, device, threshold
+                )
+                marker = "+" if above else "?"
 
                 smoothed = smoother.update(label, conf) if above else None
-                stable = f'  [{smoothed.label}]{"*" if smoothed.is_new else " "}' if smoothed else ''
-                print(f'\r{marker} {label:<12} {conf:.0%}{stable}   ', end='', flush=True)
+                stable = (
+                    f"  [{smoothed.label}]{'*' if smoothed.is_new else ' '}"
+                    if smoothed
+                    else ""
+                )
+                print(
+                    f"\r{marker} {label:<12} {conf:.0%}{stable}   ", end="", flush=True
+                )
         else:
             smoother.clear()
 
-        cv2.imshow('WaveSL', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        cv2.imshow("WaveSL", frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     print()
@@ -157,27 +167,37 @@ def run(camera_index: int, model_path: Optional[str],
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='WaveSL - ASL to Speech')
-    parser.add_argument('--camera', type=int, default=None,
-                        help='Camera index (skips interactive selection)')
-    parser.add_argument('--model', type=str, default=None,
-                        help='Path to trained .pt model file')
-    parser.add_argument('--threshold', type=float, default=CONFIDENCE_THRESHOLD,
-                        help=f'Confidence threshold (default: {CONFIDENCE_THRESHOLD})')
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+    parser = argparse.ArgumentParser(description="WaveSL - ASL to Speech")
+    parser.add_argument(
+        "--camera",
+        type=int,
+        default=None,
+        help="Camera index (skips interactive selection)",
+    )
+    parser.add_argument(
+        "--model", type=str, default=None, help="Path to trained .pt model file"
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=CONFIDENCE_THRESHOLD,
+        help=f"Confidence threshold (default: {CONFIDENCE_THRESHOLD})",
+    )
     args = parser.parse_args()
 
     model_path = args.model
     if model_path is None:
-        default = Path(__file__).parent.parent / 'models' / 'wlasl' / 'best_model.pt'
+        default = Path(__file__).parent.parent / "models" / "wlasl" / "best_model.pt"
         if default.exists():
             model_path = str(default)
         else:
-            print(f'Warning: no model found at {default}')
-            print('Run train_wlasl_model.sh to train one, or pass --model <path>')
+            print(f"Warning: no model found at {default}")
+            print("Run train_wlasl_model.sh to train one, or pass --model <path>")
 
     camera_index = args.camera if args.camera is not None else select_camera()
     run(camera_index, model_path, args.threshold)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

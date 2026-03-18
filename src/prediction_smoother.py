@@ -21,13 +21,17 @@ class PredictionSmoother:
     Rolling majority-vote buffer over per-frame (label, confidence) predictions.
 
     Args:
-        buffer_size: Number of recent frames to consider (default 15 ≈ 0.5 s at 30 fps).
+        buffer_size: Number of recent frames to consider (default 15 ~= 0.5 s at 30 fps).
         majority_threshold: Fraction of buffer a label must win to be emitted (default 0.6).
         cooldown_frames: Frames to suppress re-emission after emitting a label (default 10).
     """
 
-    def __init__(self, buffer_size: int = 15, majority_threshold: float = 0.6,
-                 cooldown_frames: int = 10) -> None:
+    def __init__(
+        self,
+        buffer_size: int = 15,
+        majority_threshold: float = 0.6,
+        cooldown_frames: int = 10,
+    ) -> None:
         self._buffer_size = buffer_size
         self._majority_threshold = majority_threshold
         self._cooldown_frames = cooldown_frames
@@ -61,11 +65,14 @@ class PredictionSmoother:
         if is_new:
             self._cooldown_remaining = self._cooldown_frames
 
-        avg_conf = sum(
-            c for lbl, c in zip(self._labels, self._confs) if lbl == top_label
-        ) / top_count
+        avg_conf = (
+            sum(c for lbl, c in zip(self._labels, self._confs) if lbl == top_label)
+            / top_count
+        )
 
-        return SmoothedPrediction(label=top_label, avg_confidence=avg_conf, is_new=is_new)
+        return SmoothedPrediction(
+            label=top_label, avg_confidence=avg_conf, is_new=is_new
+        )
 
     def clear(self) -> None:
         """Reset the buffer (call when no hands are detected)."""
