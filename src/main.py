@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 WaveSL - Real-time ASL to Speech Translation
-Phase 2, Step 5: Model inference with confidence threshold
+Phase 2, Step 6: Temporal smoothing with majority-vote buffer
 """
 
 import argparse
 import contextlib
-import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -31,67 +30,14 @@ with _suppress_c_stderr():
     import mediapipe as mp
 import numpy as np
 import torch
-import torch.nn as nn
 
 from constants import EXPECTED_FEATURE_SIZE
 from device_selector import select_camera
+from model import ASLModel, load_model
+from prediction_smoother import PredictionSmoother
 
 _FINGERTIPS = [4, 8, 12, 16, 20]
 CONFIDENCE_THRESHOLD = 0.6
-
-
-# ── Model ─────────────────────────────────────────────────────────────────────
-
-class ASLModel(nn.Module):
-    def __init__(self, input_size: int, num_classes: int,
-                 hidden_sizes: list[int] = [256, 128, 64]):
-        super().__init__()
-        layers: list[nn.Module] = []
-        prev = input_size
-        for h in hidden_sizes:
-            layers += [nn.Linear(prev, h), nn.ReLU(), nn.Dropout(0.3)]
-            prev = h
-        layers.append(nn.Linear(prev, num_classes))
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.network(x)
-
-
-def load_model(model_path: str) -> tuple[ASLModel, dict[int, str], torch.device]:
-    """
-    Load a trained ASLModel from a .pt state-dict file.
-    Looks for class_mapping.json in the same directory.
-    Returns (model, reverse_mapping, device).
-    """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    path = Path(model_path)
-
-    state_dict = torch.load(str(path), map_location=device, weights_only=True)
-
-    # Infer architecture from state dict
-    first_key = next(k for k in state_dict if 'weight' in k)
-    last_key = next(k for k in reversed(list(state_dict.keys())) if 'weight' in k)
-    input_size = state_dict[first_key].shape[1]
-    num_classes = state_dict[last_key].shape[0]
-
-    model = ASLModel(input_size=input_size, num_classes=num_classes)
-    model.load_state_dict(state_dict)
-    model.to(device)
-    model.eval()
-
-    # Load class mapping
-    mapping_path = path.parent / 'class_mapping.json'
-    reverse_mapping: dict[int, str] = {}
-    if mapping_path.exists():
-        with open(mapping_path) as f:
-            class_mapping: dict[str, int] = json.load(f)
-        reverse_mapping = {idx: name for name, idx in class_mapping.items()}
-        print(f'Loaded model: {num_classes} classes from {path}')
-    else:
-        print(f'Loaded model: {num_classes} classes (no class_mapping.json found)')
-
-    return model, reverse_mapping, device
 
 
 # ── Feature extraction ────────────────────────────────────────────────────────
@@ -166,6 +112,7 @@ def run(camera_index: int, model_path: Optional[str],
     else:
         print('No model provided — running feature extraction only')
 
+    smoother = PredictionSmoother()
     print('Camera feed open — press q to quit')
 
     while True:
@@ -192,7 +139,12 @@ def run(camera_index: int, model_path: Optional[str],
             if model is not None:
                 label, conf, above = infer(model, features, reverse_mapping, device, threshold)
                 marker = '✓' if above else '?'
-                print(f'\r{marker} {label:<12} {conf:.0%}   ', end='', flush=True)
+
+                smoothed = smoother.update(label, conf) if above else None
+                stable = f'  [{smoothed.label}]{"*" if smoothed.is_new else " "}' if smoothed else ''
+                print(f'\r{marker} {label:<12} {conf:.0%}{stable}   ', end='', flush=True)
+        else:
+            smoother.clear()
 
         cv2.imshow('WaveSL', frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):

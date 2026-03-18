@@ -19,6 +19,7 @@ from tqdm import tqdm
 import argparse
 
 from constants import EXPECTED_FEATURE_SIZE
+from model import ASLModel
 
 
 class ASLDataset(Dataset):
@@ -94,36 +95,6 @@ class ASLDataset(Dataset):
         features = self.feature_extractor(frame)
         return features
 
-
-class ASLModel(nn.Module):
-    """Neural network model for ASL sign recognition"""
-    
-    def __init__(self, input_size: int, num_classes: int, hidden_sizes: List[int] = [256, 128, 64]):
-        """
-        Initialize ASL model
-        
-        Args:
-            input_size: Size of input feature vector
-            num_classes: Number of ASL sign classes
-            hidden_sizes: Sizes of hidden layers
-        """
-        super(ASLModel, self).__init__()
-        
-        layers = []
-        prev_size = input_size
-        
-        for hidden_size in hidden_sizes:
-            layers.append(nn.Linear(prev_size, hidden_size))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(0.3))
-            prev_size = hidden_size
-        
-        layers.append(nn.Linear(prev_size, num_classes))
-        
-        self.network = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.network(x)
 
 
 def extract_hand_features_mp(frame: np.ndarray, hands) -> np.ndarray:
