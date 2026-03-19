@@ -3,4 +3,3 @@ models/wlasl/best_model.pt filter=lfs diff=lfs merge=lfs -text
 models/wlasl/final_model.pt filter=lfs diff=lfs merge=lfs -text
 *.pt filter=lfs diff=lfs merge=lfs -text
 models/wlasl/class_mapping.json text
-

@@ -220,7 +220,7 @@ models/*/logs/
 
 # WLASL dataset (large video files)
 dataset/
-wlasl/
+/wlasl/
 *.mp4
 *.avi
 *.mov
