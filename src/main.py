@@ -5,6 +5,7 @@ Phase 2, Step 6: Temporal smoothing with majority-vote buffer
 """
 
 import argparse
+import collections
 import contextlib
 import logging
 import os
@@ -19,9 +20,9 @@ with contextlib.redirect_stderr(open(os.devnull, "w")):
 import numpy as np
 import torch
 
-from constants import EXPECTED_FEATURE_SIZE
+from constants import DEFAULT_SEQ_LEN, EXPECTED_FEATURE_SIZE
 from device_selector import select_camera
-from model import ASLModel, load_model
+from model import ASLLSTMModel, AnyASLModel, load_model
 from prediction_smoother import PredictionSmoother
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ def extract_features(hand_landmarks_list: list) -> np.ndarray:
 
 
 def infer(
-    model: ASLModel,
+    model: AnyASLModel,
     features: np.ndarray,
     reverse_mapping: dict[int, str],
     device: torch.device,
@@ -67,8 +68,8 @@ def infer(
 ) -> tuple[str, float, bool]:
     """
     Run one inference pass.
+    features: (EXPECTED_FEATURE_SIZE,) for MLP, or (seq_len, EXPECTED_FEATURE_SIZE) for LSTM.
     Returns (label, confidence, above_threshold).
-    Always returns the top prediction so callers can inspect raw output.
     """
     tensor = torch.from_numpy(features).unsqueeze(0).to(device)
     with torch.no_grad():
@@ -108,10 +109,18 @@ def run(
         min_tracking_confidence=0.5,
     )
 
-    model, reverse_mapping, device = (None, {}, torch.device("cpu"))
+    model: Optional[AnyASLModel] = None
+    reverse_mapping: dict[int, str] = {}
+    device = torch.device("cpu")
     if model_path:
         model, reverse_mapping, device = load_model(model_path)
-    else:
+
+    # For LSTM models, maintain a rolling feature buffer
+    is_lstm = isinstance(model, ASLLSTMModel) if model is not None else False
+    seq_len = DEFAULT_SEQ_LEN
+    feature_buffer: collections.deque[np.ndarray] = collections.deque(maxlen=seq_len)
+
+    if model is None:
         print("No model provided -- running feature extraction only")
 
     smoother = PredictionSmoother()
@@ -139,8 +148,24 @@ def run(
             features = extract_features(results.multi_hand_landmarks)
 
             if model is not None:
+                if is_lstm:
+                    feature_buffer.append(features)
+                    if len(feature_buffer) < seq_len:
+                        # Buffer not full yet — show progress
+                        print(
+                            f"\rBuffering frames {len(feature_buffer)}/{seq_len}...",
+                            end="", flush=True,
+                        )
+                        cv2.imshow("WaveSL", frame)
+                        if cv2.waitKey(1) & 0xFF == ord("q"):
+                            break
+                        continue
+                    infer_input = np.stack(feature_buffer)  # (seq_len, 146)
+                else:
+                    infer_input = features  # (146,)
+
                 label, conf, above = infer(
-                    model, features, reverse_mapping, device, threshold
+                    model, infer_input, reverse_mapping, device, threshold
                 )
                 marker = "+" if above else "?"
 
@@ -155,6 +180,7 @@ def run(
                 )
         else:
             smoother.clear()
+            feature_buffer.clear()
 
         cv2.imshow("WaveSL", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):

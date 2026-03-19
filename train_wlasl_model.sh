@@ -1,37 +1,39 @@
 #!/bin/bash
-# Script to train WLASL model once - run this after preparing the dataset
+# Train the WaveSL LSTM model on the prepared WLASL dataset.
+# Run prepare_wlasl.py first if dataset/wlasl does not exist.
 
-set -e  # Exit on error
+set -e
 
-echo "=== WLASL Model Training Script ==="
+echo "=== WaveSL Model Training ==="
 echo ""
 
-# Check if dataset exists
 if [ ! -d "dataset/wlasl" ]; then
-    echo "Error: dataset/wlasl not found!"
-    echo "Please prepare the WLASL dataset first:"
-    echo "  python src/prepare_wlasl.py --wlasl-dir ~/wlasl --output-dir dataset/wlasl"
+    echo "Error: dataset/wlasl not found."
+    echo "Prepare the dataset first:"
+    echo "  python src/prepare_wlasl.py --wlasl-dir /path/to/WLASL/start_kit \\"
+    echo "      --output-dir dataset/wlasl --class-mapping models/wlasl/class_mapping.json"
     exit 1
 fi
 
-# Check if virtual environment is activated
 if [ -z "$VIRTUAL_ENV" ]; then
     echo "Activating virtual environment..."
     source venv/bin/activate
 fi
 
-# Create models directory
-mkdir -p models/wlasl
+mkdir -p models/wlasl dataset/wlasl_cache
 
-echo "Starting training..."
-echo "Dataset: dataset/wlasl"
-echo "Output: models/wlasl"
+echo "Model type: LSTM (seq_len=16)"
+echo "Dataset:    dataset/wlasl"
+echo "Cache:      dataset/wlasl_cache"
+echo "Output:     models/wlasl"
 echo ""
 
-# Train the model
 python src/train_asl_model.py \
     --data-dir dataset/wlasl \
     --output-dir models/wlasl \
+    --cache-dir dataset/wlasl_cache \
+    --model-type lstm \
+    --seq-len 16 \
     --epochs 50 \
     --batch-size 32 \
     --learning-rate 0.001 \
@@ -39,9 +41,8 @@ python src/train_asl_model.py \
 
 echo ""
 echo "=== Training Complete ==="
-echo "Model saved to: models/wlasl/best_model.pt"
-echo "Class mapping saved to: models/wlasl/class_mapping.json"
+echo "Model:         models/wlasl/best_model.pt"
+echo "Class mapping: models/wlasl/class_mapping.json"
 echo ""
-echo "You can now run the application:"
+echo "Run the app:"
 echo "  python src/main.py"
-
