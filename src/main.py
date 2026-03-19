@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 WaveSL - Real-time ASL to Speech Translation
-Phase 2, Step 6: Temporal smoothing with majority-vote buffer
+Phase 3: TTS + audio routing, subtitle overlay
 """
 
 import argparse
@@ -9,6 +9,8 @@ import collections
 import contextlib
 import logging
 import os
+import queue
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -20,15 +22,19 @@ with contextlib.redirect_stderr(open(os.devnull, "w")):
 import numpy as np
 import torch
 
+from audio_output import AudioOutput
 from constants import DEFAULT_SEQ_LEN, EXPECTED_FEATURE_SIZE
-from device_selector import select_camera
+from device_selector import run_device_selection
 from model import ASLLSTMModel, AnyASLModel, load_model
 from prediction_smoother import PredictionSmoother
+from tts_engine import TTSEngine
 
 logger = logging.getLogger(__name__)
 
 _FINGERTIPS = [4, 8, 12, 16, 20]
 CONFIDENCE_THRESHOLD = 0.6
+
+_WINDOW_NAME = "WaveSL - Camera Feed"
 
 
 # -- Feature extraction -------------------------------------------------------
@@ -82,13 +88,48 @@ def infer(
     return label, conf, conf >= threshold
 
 
+# -- Subtitle overlay ---------------------------------------------------------
+
+
+def draw_subtitle(frame: np.ndarray, text: str) -> None:
+    """Draw a subtitle at the bottom of the frame (shadow + white text)."""
+    if not text:
+        return
+    y = frame.shape[0] - 40
+    for color, thickness in [((0, 0, 0), 4), ((255, 255, 255), 2)]:
+        cv2.putText(
+            frame, text, (20, y),
+            cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, thickness, cv2.LINE_AA,
+        )
+
+
+# -- TTS worker ---------------------------------------------------------------
+
+
+def _tts_worker(
+    tts_queue: "queue.Queue[Optional[str]]",
+    tts_engine: TTSEngine,
+    audio_output: AudioOutput,
+) -> None:
+    """Daemon thread: drain tts_queue, synthesize, and play each label."""
+    while True:
+        label = tts_queue.get()
+        if label is None:  # shutdown sentinel
+            break
+        audio = tts_engine.synthesize(label)
+        if audio is not None:
+            audio_output.play(audio)
+
+
 # -- Main loop ----------------------------------------------------------------
 
 
 def run(
     camera_index: int,
     model_path: Optional[str],
+    audio_device: Optional[str] = None,
     threshold: float = CONFIDENCE_THRESHOLD,
+    tts_enabled: bool = True,
 ) -> None:
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
@@ -114,102 +155,128 @@ def run(
     device = torch.device("cpu")
     if model_path:
         model, reverse_mapping, device = load_model(model_path)
+    else:
+        print("No model provided -- running feature extraction only")
 
-    # For LSTM models, maintain a rolling feature buffer
+    # LSTM rolling feature buffer
     is_lstm = isinstance(model, ASLLSTMModel) if model is not None else False
     seq_len = DEFAULT_SEQ_LEN
     feature_buffer: collections.deque[np.ndarray] = collections.deque(maxlen=seq_len)
 
-    if model is None:
-        print("No model provided -- running feature extraction only")
-
     smoother = PredictionSmoother()
-    print("Camera feed open -- press q to quit")
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            logger.warning("failed to read frame")
-            continue
+    # TTS + audio setup
+    tts_queue: "queue.Queue[Optional[str]]" = queue.Queue()
+    tts_engine: Optional[TTSEngine] = None
+    audio_output: Optional[AudioOutput] = None
+    tts_thread: Optional[threading.Thread] = None
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = hands.process(rgb)
+    if tts_enabled:
+        tts_engine = TTSEngine()
+        audio_output = AudioOutput(device_name=audio_device)
+        tts_thread = threading.Thread(
+            target=_tts_worker,
+            args=(tts_queue, tts_engine, audio_output),
+            daemon=True,
+        )
+        tts_thread.start()
 
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS,
-                    mp_drawing_styles.get_default_hand_landmarks_style(),
-                    mp_drawing_styles.get_default_hand_connections_style(),
-                )
+    # Track current stable label for subtitle
+    current_label = ""
 
-            features = extract_features(results.multi_hand_landmarks)
+    print(f"Camera feed open -- press q to quit")
+    print(f"TTS {'enabled' if tts_enabled else 'disabled'}")
 
-            if model is not None:
-                if is_lstm:
-                    feature_buffer.append(features)
-                    if len(feature_buffer) < seq_len:
-                        # Buffer not full yet — show progress
-                        print(
-                            f"\rBuffering frames {len(feature_buffer)}/{seq_len}...",
-                            end="", flush=True,
-                        )
-                        cv2.imshow("WaveSL", frame)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            break
-                        continue
-                    infer_input = np.stack(feature_buffer)  # (seq_len, 146)
-                else:
-                    infer_input = features  # (146,)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                logger.warning("failed to read frame")
+                continue
 
-                label, conf, above = infer(
-                    model, infer_input, reverse_mapping, device, threshold
-                )
-                marker = "+" if above else "?"
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = hands.process(rgb)
 
-                smoothed = smoother.update(label, conf) if above else None
-                stable = (
-                    f"  [{smoothed.label}]{'*' if smoothed.is_new else ' '}"
-                    if smoothed
-                    else ""
-                )
-                print(
-                    f"\r{marker} {label:<12} {conf:.0%}{stable}   ", end="", flush=True
-                )
-        else:
-            smoother.clear()
-            feature_buffer.clear()
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(
+                        frame,
+                        hand_landmarks,
+                        mp_hands.HAND_CONNECTIONS,
+                        mp_drawing_styles.get_default_hand_landmarks_style(),
+                        mp_drawing_styles.get_default_hand_connections_style(),
+                    )
 
-        cv2.imshow("WaveSL", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+                features = extract_features(results.multi_hand_landmarks)
 
-    print()
-    hands.close()
-    cap.release()
-    cv2.destroyAllWindows()
+                if model is not None:
+                    if is_lstm:
+                        feature_buffer.append(features)
+                        if len(feature_buffer) < seq_len:
+                            print(
+                                f"\rBuffering frames {len(feature_buffer)}/{seq_len}...",
+                                end="", flush=True,
+                            )
+                            draw_subtitle(frame, current_label)
+                            cv2.imshow(_WINDOW_NAME, frame)
+                            if cv2.waitKey(1) & 0xFF == ord("q"):
+                                break
+                            continue
+                        infer_input = np.stack(feature_buffer)
+                    else:
+                        infer_input = features
+
+                    label, conf, above = infer(
+                        model, infer_input, reverse_mapping, device, threshold
+                    )
+                    marker = "+" if above else "?"
+
+                    smoothed = smoother.update(label, conf) if above else None
+                    if smoothed is not None:
+                        current_label = smoothed.label
+                        if smoothed.is_new and tts_engine is not None:
+                            tts_queue.put(smoothed.label)
+
+                    stable = (
+                        f"  [{smoothed.label}]{'*' if smoothed.is_new else ' '}"
+                        if smoothed
+                        else ""
+                    )
+                    print(
+                        f"\r{marker} {label:<12} {conf:.0%}{stable}   ",
+                        end="", flush=True,
+                    )
+            else:
+                smoother.clear()
+                feature_buffer.clear()
+
+            draw_subtitle(frame, current_label)
+            cv2.imshow(_WINDOW_NAME, frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+    finally:
+        print()
+        hands.close()
+        cap.release()
+        cv2.destroyAllWindows()
+        if tts_thread is not None:
+            tts_queue.put(None)  # stop sentinel
+        if audio_output is not None:
+            audio_output.close()
 
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="WaveSL - ASL to Speech")
-    parser.add_argument(
-        "--camera",
-        type=int,
-        default=None,
-        help="Camera index (skips interactive selection)",
-    )
-    parser.add_argument(
-        "--model", type=str, default=None, help="Path to trained .pt model file"
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=CONFIDENCE_THRESHOLD,
-        help=f"Confidence threshold (default: {CONFIDENCE_THRESHOLD})",
-    )
+    parser.add_argument("--camera", type=int, default=None,
+                        help="Camera index (skips interactive selection)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Path to trained .pt model file")
+    parser.add_argument("--threshold", type=float, default=CONFIDENCE_THRESHOLD,
+                        help=f"Confidence threshold (default: {CONFIDENCE_THRESHOLD})")
+    parser.add_argument("--no-tts", action="store_true",
+                        help="Disable TTS and audio output")
     args = parser.parse_args()
 
     model_path = args.model
@@ -221,8 +288,19 @@ def main() -> None:
             print(f"Warning: no model found at {default}")
             print("Run train_wlasl_model.sh to train one, or pass --model <path>")
 
-    camera_index = args.camera if args.camera is not None else select_camera()
-    run(camera_index, model_path, args.threshold)
+    if args.camera is not None:
+        camera_index = args.camera
+        audio_device = None
+    else:
+        camera_index, audio_device = run_device_selection()
+
+    run(
+        camera_index=camera_index,
+        model_path=model_path,
+        audio_device=audio_device,
+        threshold=args.threshold,
+        tts_enabled=not args.no_tts,
+    )
 
 
 if __name__ == "__main__":
