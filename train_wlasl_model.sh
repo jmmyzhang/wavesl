@@ -22,7 +22,7 @@ fi
 
 mkdir -p models/wlasl dataset/wlasl_cache
 
-echo "Model type: LSTM (seq_len=16)"
+echo "Model type: LSTM (seq_len=16, top-100 classes, augment)"
 echo "Dataset:    dataset/wlasl"
 echo "Cache:      dataset/wlasl_cache"
 echo "Output:     models/wlasl"
@@ -34,6 +34,8 @@ python src/train_asl_model.py \
     --cache-dir dataset/wlasl_cache \
     --model-type lstm \
     --seq-len 16 \
+    --top-n 100 \
+    --augment \
     --epochs 50 \
     --batch-size 32 \
     --learning-rate 0.001 \

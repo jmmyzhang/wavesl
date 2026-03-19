@@ -174,7 +174,16 @@ class ASLSequenceDataset(Dataset):
     """
     Loads pre-cached feature sequences for LSTM training.
     Each sample is a (seq_len, EXPECTED_FEATURE_SIZE) tensor.
+
+    When augment=True applies per-epoch random transforms:
+      - Mirror: negate all x-coordinates (simulates opposite hand orientation)
+      - Jitter: add small Gaussian noise to landmark positions
     """
+
+    # x-coordinate indices within a single-hand 73-dim block (every 3rd, first 63)
+    _X_INDICES_H1 = list(range(0, 63, 3))
+    _X_INDICES_H2 = [i + 73 for i in _X_INDICES_H1]
+    _X_INDICES = _X_INDICES_H1 + _X_INDICES_H2
 
     def __init__(
         self,
@@ -182,9 +191,11 @@ class ASLSequenceDataset(Dataset):
         cache_dir: Path,
         class_mapping: Dict[str, int],
         seq_len: int = DEFAULT_SEQ_LEN,
+        augment: bool = False,
     ):
         self.cache_dir = cache_dir
         self.seq_len = seq_len
+        self.augment = augment
         self.samples: list[tuple[str, int]] = []
 
         for sign_name, class_idx in class_mapping.items():
@@ -196,14 +207,23 @@ class ASLSequenceDataset(Dataset):
                         self.samples.append((vf.stem, class_idx))
 
         print(f"Sequence dataset: {len(self.samples)} cached samples "
-              f"(seq_len={seq_len}) from {len(class_mapping)} classes")
+              f"(seq_len={seq_len}, augment={augment}) from {len(class_mapping)} classes")
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         stem, label = self.samples[idx]
-        seq = np.load(self.cache_dir / f"{stem}_f{self.seq_len}.npy")
+        seq = np.load(self.cache_dir / f"{stem}_f{self.seq_len}.npy").copy()
+
+        if self.augment:
+            # Mirror (50% chance): negate all x-coordinates
+            if np.random.random() < 0.5:
+                seq[:, self._X_INDICES] *= -1.0
+            # Jitter: small Gaussian noise on landmark coordinates only (not distances)
+            noise = np.random.normal(0, 0.005, seq[:, :126].shape).astype(np.float32)
+            seq[:, :126] += noise
+
         return torch.from_numpy(seq), torch.tensor(label, dtype=torch.long)
 
 
@@ -288,6 +308,10 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--train-split", type=float, default=0.8)
+    parser.add_argument("--top-n", type=int, default=None,
+                        help="Limit to the N classes with the most videos (default: all)")
+    parser.add_argument("--augment", action="store_true",
+                        help="Enable training data augmentation (mirror + jitter)")
 
     args = parser.parse_args()
 
@@ -299,11 +323,20 @@ def main() -> None:
     cache_dir = Path(args.cache_dir)
     data_path = Path(args.data_dir)
 
-    # Discover classes
-    class_names = sorted([d.name for d in data_path.iterdir() if d.is_dir()])
+    # Discover classes — optionally filtered to top-N by video count
+    all_class_dirs = [d for d in data_path.iterdir() if d.is_dir()]
+    if args.top_n is not None:
+        all_class_dirs = sorted(
+            all_class_dirs,
+            key=lambda d: len(list(d.glob("*.mp4"))),
+            reverse=True,
+        )[: args.top_n]
+        print(f"Filtering to top {args.top_n} classes by video count")
+
+    class_names = sorted(d.name for d in all_class_dirs)
     class_mapping = {name: idx for idx, name in enumerate(class_names)}
     num_classes = len(class_mapping)
-    print(f"Found {num_classes} sign classes")
+    print(f"Training on {num_classes} sign classes")
 
     mapping_path = Path(args.output_dir) / "class_mapping.json"
     with open(mapping_path, "w") as f:
@@ -324,7 +357,7 @@ def main() -> None:
     # Build dataset
     if args.model_type == "lstm":
         full_dataset: Dataset = ASLSequenceDataset(
-            data_path, cache_dir, class_mapping, seq_len
+            data_path, cache_dir, class_mapping, seq_len, augment=args.augment
         )
     else:
         full_dataset = ASLDataset(data_path, cache_dir, class_mapping, seq_len=1)
