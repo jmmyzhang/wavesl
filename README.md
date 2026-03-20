@@ -1,17 +1,26 @@
 # Smile and Wave!
-WaveSL removes the need for sign language interpreters over video call, translating real-time ASL into realistic voice and subtitle outputs.
 
-**Note**: This project uses the WLASL (Word-Level American Sign Language) dataset for training ASL recognition models.
+WaveSL is a real-time American Sign Language (ASL) to speech translation application. It recognizes hand gestures in real-time using deep learning and converts them to spoken text, enabling ASL-to-speech communication over video calls.
 
-## Overview
+**Technology Stack:**
+- Python 3.11 | PyTorch LSTM | MediaPipe Hands | Coqui TTS
+- Real-time hand landmark detection and sequence classification
+- 10-word vocabulary trained on WLASL dataset
 
-WaveSL creates a virtual video device (via OBS) and virtual audio device (via BlackHole) that can be used in Zoom, Discord, or any video conferencing application. The program:
-- Captures video from your physical camera
-- Processes frames in real-time to recognize ASL signs
-- Converts recognized signs to text
-- Synthesizes speech from the text
-- Outputs the original video feed (for OBS to capture as virtual camera)
-- Outputs the synthesized speech (to BlackHole virtual audio device)
+## What It Does
+
+WaveSL captures video from your camera, detects hand movements using MediaPipe, feeds sequences of hand landmarks to a trained LSTM neural network, and synthesizes realistic speech from recognized signs. Recognized words are displayed as subtitles on the camera feed and can be output as audio to a virtual audio device for video conferencing platforms.
+
+**Supported Signs:** before, computer, deaf, drink, hot, like, mother, orange, who, yes
+
+**Demo Flow:**
+1. Captures video from your physical camera
+2. Detects hand landmarks from MediaPipe in real-time
+3. Feeds landmark sequences to LSTM model for sign recognition
+4. Converts recognized signs to text
+5. Synthesizes speech using Coqui TTS
+6. Displays subtitles on video feed
+7. Outputs synthesized speech to virtual audio device
 
 ## Prerequisites
 
@@ -24,13 +33,11 @@ WaveSL creates a virtual video device (via OBS) and virtual audio device (via Bl
    - Download from: https://obsproject.com/
    - Install and set up OBS to capture the WaveSL video window as a virtual camera
 
-3. **Python 3.8-3.11** with pip
-   - **Important**: Coqui TTS requires Python <3.12, so Python 3.11 is the latest supported version
-   - If you have Python 3.12+, you'll need to install Python 3.11 using pyenv or Homebrew:
+3. **Python 3.11** with pip
+   - **Important**: Coqui TTS requires Python <3.12, so Python 3.11 is required
+   - Install using Homebrew if needed:
      ```bash
-     # Using Homebrew:
      brew install python@3.11
-     # Then use: python3.11 -m venv venv
      ```
 
 ## Installation
@@ -44,19 +51,10 @@ WaveSL creates a virtual video device (via OBS) and virtual audio device (via Bl
    python3.11 --version
    ```
 
-2. Create and activate a virtual environment using Python 3.11 (or 3.8-3.11):
+2. Create and activate a virtual environment:
 ```bash
-# Remove old venv if it exists
-rm -rf venv
-
-# Create virtual environment with Python 3.11 (or python3.10, python3.9, etc.)
 python3.11 -m venv venv
-
-# Activate virtual environment
-# On macOS/Linux:
 source venv/bin/activate
-# On Windows:
-# venv\Scripts\activate
 ```
 
 3. Install dependencies:
@@ -64,16 +62,15 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-   **Note**: If installation is taking too long, you can try:
-   - Installing packages in stages (torch first, then TTS, then others)
-   - Using the legacy resolver: `pip install --use-deprecated=legacy-resolver -r requirements.txt`
-   - Or install core packages first: `pip install torch torchaudio TTS`, then the rest
+   **Note**: If installation is slow, try installing core packages first:
+   ```bash
+   pip install torch torchaudio TTS
+   pip install -r requirements.txt
+   ```
 
-**Note**: If you encounter an "externally-managed-environment" error, you must use a virtual environment as shown above. This is required on newer Python installations to protect system Python.
+**Note**: If you encounter an "externally-managed-environment" error, you must use a virtual environment as shown above.
 
-4. (Optional) Download and place your ASL recognition model in the project directory
-   - The model should be a PyTorch model (.pt file)
-   - Update the model path in `asl_recognizer.py` or pass it when initializing
+The project includes a pre-trained WLASL LSTM model at `models/wlasl/best_model.pt` (requires Git LFS).
 
 ## Usage
 
@@ -92,21 +89,27 @@ pip install -r requirements.txt
 
 ### Step 3: Run WaveSL
 
-Basic usage:
+Basic usage (interactive camera/audio selection):
 ```bash
 python src/main.py
 ```
 
 With options:
 ```bash
-# Use a specific camera
-python src/main.py --camera 1
+# Use a specific camera index (skip device selection)
+python src/main.py --camera 0
 
 # Use a specific audio device (e.g., BlackHole)
-python src/main.py --audio-device "BlackHole 2ch"
+python src/main.py --camera 0 --audio-device "BlackHole 2ch"
 
-# List available audio devices
-python src/main.py --list-audio
+# Disable TTS (feature extraction and subtitle display only)
+python src/main.py --no-tts
+
+# Adjust confidence threshold (default 0.6)
+python src/main.py --threshold 0.7
+
+# Specify a different model
+python src/main.py --model /path/to/model.pt
 ```
 
 ### Step 4: Configure Zoom/Discord
@@ -118,70 +121,129 @@ python src/main.py --list-audio
 
 - Press `q` in the WaveSL window to quit the application
 
-## Architecture
+## Project Structure
 
-- `main.py` - Main application entry point and orchestration
-- `asl_recognizer.py` - ASL sign recognition using MediaPipe and PyTorch
-- `tts_engine.py` - Text-to-speech synthesis using Coqui TTS
-- `audio_output.py` - Audio streaming to virtual audio device
+```
+src/
+  main.py                 # Entry point: video capture, inference, subtitle overlay
+  model.py               # LSTM/MLP architecture and model loading
+  train_asl_model.py     # Training script with feature caching and augmentation
+  prediction_smoother.py # Temporal smoothing with majority voting
+  tts_engine.py          # Coqui TTS integration
+  audio_output.py        # Virtual audio device output
+  device_selector.py     # Interactive camera/audio device selection
+  constants.py           # Feature dimensions, LSTM seq_len, fingertip indices
+  prepare_wlasl.py       # Dataset preparation script
+  prepare_dataset.py     # Generic dataset preparation utilities
 
-## Model Setup
+models/wlasl/
+  best_model.pt          # Pre-trained LSTM model (via Git LFS)
+  class_mapping.json     # Sign name to class index mapping
 
-### Using Pre-trained WLASL Model
+tests/
+  test_prediction_smoother.py  # Unit tests for temporal smoothing
+```
 
-WaveSL uses a **pre-trained model** based on the WLASL (Word-Level American Sign Language) dataset. The model is trained **once** and then used for inference - no training happens when you run the application.
+## Model Architecture & Training
 
-#### Quick Start
+### Pre-trained Model
 
-The repository includes a pre-trained WLASL model, so you can run immediately:
+The repository includes a pre-trained LSTM model (`models/wlasl/best_model.pt`) trained on 10 common ASL signs from the WLASL dataset. To use it:
 
 ```bash
-# Clone the repository
-git clone <repo-url>
-cd wavesl
-
-# Install dependencies
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run the application (uses included pre-trained model)
+git lfs install
+git lfs pull  # Download the model (if not already present)
 python src/main.py
 ```
 
-**Note**: If the model file is large, you may need Git LFS:
+### How It Works
+
+1. **Feature Extraction**: MediaPipe extracts 21 hand landmarks per hand (x, y, z coordinates) plus fingertip-to-fingertip distances = 146-dim feature vector per frame
+2. **Sequence Buffering**: LSTM expects sequences of 16 frames (0.5s at 30fps)
+3. **Classification**: LSTM processes the sequence and outputs confidence scores for 10 signs
+4. **Smoothing**: Temporal smoother applies majority voting to reduce noise and detect transitions
+
+### Model Details
+
+| Aspect | Detail |
+|--------|--------|
+| **Type** | LSTM (Sequence classifier) |
+| **Input** | 16 consecutive frames of 146-dim hand landmarks |
+| **Output** | Confidence scores for 10 sign classes |
+| **Architecture** | 2-layer LSTM (hidden=256) + dropout(0.3) + linear classifier |
+| **Classes** | before, computer, deaf, drink, hot, like, mother, orange, who, yes |
+| **Training Data** | WLASL (Word-Level American Sign Language) |
+
+### Training Your Own Model (Optional)
+
+If you want to retrain or use a different sign vocabulary:
+
+1. **Download WLASL dataset**: https://github.com/dxli94/WLASL
+2. **Prepare dataset**:
+   ```bash
+   python src/prepare_wlasl.py \
+     --wlasl-dir /path/to/WLASL/start_kit \
+     --output-dir dataset/wlasl \
+     --class-mapping models/wlasl/class_mapping.json
+   ```
+3. **Train model**:
+   ```bash
+   bash train_wlasl_model.sh
+   ```
+   This trains an LSTM with:
+   - Sequence length: 16 frames
+   - Top 100 sign classes (by video count)
+   - Data augmentation: horizontal flip + noise jitter
+   - Output: `models/wlasl/best_model.pt`
+
+4. **Update class mapping** (automatically done by prepare_wlasl.py)
+   The class mapping JSON maps sign names to class indices (0-99)
+
+### Training Script Options
+
 ```bash
-git lfs install
-git lfs pull  # Download the model file
+python src/train_asl_model.py \
+  --data-dir dataset/wlasl \
+  --output-dir models/wlasl \
+  --cache-dir dataset/wlasl_cache \
+  --model-type lstm \
+  --seq-len 16 \
+  --top-n 100 \
+  --augment \
+  --epochs 50 \
+  --batch-size 32 \
+  --learning-rate 0.001 \
+  --train-split 0.8
 ```
 
-#### Training Your Own Model (Optional)
+**Feature Caching**: Features are cached to disk on first run, then loaded instantly on subsequent epochs.
 
-A pre-trained model is included in the repository. If you want to train your own model or use a different vocabulary size:
+## Testing
 
-See **[SETUP_WLASL.md](SETUP_WLASL.md)** for complete setup instructions.
+Run the test suite:
+```bash
+pytest tests/
+```
 
-Quick summary:
-1. **Download WLASL dataset** from [WLASL repository](https://github.com/dxli94/WLASL)
-2. **Prepare dataset**: `python src/prepare_wlasl.py --wlasl-dir ~/wlasl --output-dir dataset/wlasl`
-3. **Train model**: `./train_wlasl_model.sh`
-4. **Use your trained model**: `python src/main.py` (will use your model if it exists)
-
-#### Model Details
-
-- **Dataset**: WLASL (Word-Level American Sign Language)
-- **Vocabulary**: Up to 2,000 common ASL words
-- **Architecture**: Neural network classifier using MediaPipe hand landmarks
-- **Input**: Hand landmark features extracted from video frames
-- **Output**: Sign class predictions mapped to text
-- **Training**: Done once, model saved to `models/wlasl/best_model.pt`
-- **Inference**: Fast, real-time recognition using pre-trained model
-
-**Important**: The application uses a **pre-trained model** - it does NOT train on startup. Training is a one-time setup step.
+Tests cover the prediction smoother (temporal smoothing with majority voting). To add more tests, see `tests/test_prediction_smoother.py` for examples.
 
 ## Troubleshooting
 
-- **Camera not found**: Use `--camera` to specify a different camera index
-- **Audio device not found**: Use `--list-audio` to see available devices, then specify with `--audio-device`
-- **OBS can't see the window**: Make sure the WaveSL window is visible and not minimized
-- **No ASL recognition**: Make sure you have a trained model loaded, or implement the placeholder recognition logic
+| Issue | Solution |
+|-------|----------|
+| **Model not found** | Run `git lfs pull` to download pre-trained model, or train your own with `bash train_wlasl_model.sh` |
+| **Camera not found** | Run `python src/main.py --camera N` with different N values (0, 1, 2...) |
+| **Audio device not found** | Ensure BlackHole is installed; the app will prompt for device selection |
+| **OBS can't capture window** | Make sure the WaveSL window is visible (not minimized or hidden) |
+| **Poor recognition accuracy** | Ensure lighting is good, hands are clearly visible, and you're performing the sign cleanly |
+| **Slow startup** | First run caches features (~1-2 min); subsequent runs are instant |
+| **Import errors** | Ensure you've activated the venv: `source venv/bin/activate` |
+
+## Dependencies
+
+- `torch` / `torchaudio` - PyTorch deep learning
+- `mediapipe` - Hand landmark detection
+- `opencv-python` - Video capture and processing
+- `TTS` (Coqui TTS) - Text-to-speech synthesis
+- `sounddevice` - Virtual audio output
+- `numpy` - Numerical computing
