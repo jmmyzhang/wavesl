@@ -4,12 +4,12 @@ Prepare WLASL dataset for training.
 Downloads and organizes WLASL dataset into the format needed for training.
 """
 
+import argparse
 import json
 import shutil
 from pathlib import Path
 from typing import Optional
 
-import argparse
 from tqdm import tqdm
 
 

@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 from audio_output import AudioOutput
-from constants import DEFAULT_SEQ_LEN, EXPECTED_FEATURE_SIZE
+from constants import DEFAULT_SEQ_LEN, EXPECTED_FEATURE_SIZE, _FINGERTIPS
 from device_selector import run_device_selection
 from model import ASLLSTMModel, AnyASLModel, load_model
 from prediction_smoother import PredictionSmoother
@@ -31,7 +31,6 @@ from tts_engine import TTSEngine
 
 logger = logging.getLogger(__name__)
 
-_FINGERTIPS = [4, 8, 12, 16, 20]
 CONFIDENCE_THRESHOLD = 0.6
 
 _WINDOW_NAME = "WaveSL - Camera Feed"
@@ -184,7 +183,7 @@ def run(
     # Track current stable label for subtitle
     current_label = ""
 
-    print(f"Camera feed open -- press q to quit")
+    print("Camera feed open -- press q to quit")
     print(f"TTS {'enabled' if tts_enabled else 'disabled'}")
 
     try:

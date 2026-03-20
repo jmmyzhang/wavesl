@@ -9,3 +9,6 @@ EXPECTED_FEATURE_SIZE = 146
 
 # Number of frames sampled per video for sequence models (LSTM)
 DEFAULT_SEQ_LEN = 16
+
+# MediaPipe hand landmark indices for fingertips (thumb, index, middle, ring, pinky)
+_FINGERTIPS: list[int] = [4, 8, 12, 16, 20]

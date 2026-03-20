@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import cv2
 import mediapipe as mp
@@ -28,12 +28,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from constants import DEFAULT_SEQ_LEN, EXPECTED_FEATURE_SIZE
+from constants import DEFAULT_SEQ_LEN, EXPECTED_FEATURE_SIZE, _FINGERTIPS
 from model import ASLLSTMModel, ASLModel, AnyASLModel
 
 logger = logging.getLogger(__name__)
-
-_FINGERTIPS = [4, 8, 12, 16, 20]
 
 
 # -- Feature extraction -------------------------------------------------------
@@ -142,7 +140,7 @@ class ASLDataset(Dataset):
         self,
         data_dir: Path,
         cache_dir: Path,
-        class_mapping: Dict[str, int],
+        class_mapping: dict[str, int],
         seq_len: int = 1,
     ):
         self.cache_dir = cache_dir
@@ -189,7 +187,7 @@ class ASLSequenceDataset(Dataset):
         self,
         data_dir: Path,
         cache_dir: Path,
-        class_mapping: Dict[str, int],
+        class_mapping: dict[str, int],
         seq_len: int = DEFAULT_SEQ_LEN,
         augment: bool = False,
     ):

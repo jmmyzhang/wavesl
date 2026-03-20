@@ -31,12 +31,10 @@ class TTSEngine:
             logger.warning("Could not load TTS model: %s -- TTS will be unavailable", e)
             self.tts = None
 
-    def synthesize(self, text: str, sample_rate: int = 22050) -> Optional[np.ndarray]:
+    def synthesize(self, text: str) -> Optional[np.ndarray]:
         """
         Synthesize speech from text.
         Returns audio as a float32 numpy array normalized to [-1, 1], or None.
-        The sample_rate parameter is accepted for API compatibility; Coqui TTS
-        produces audio at the model's native rate regardless of this value.
         """
         if not text or not text.strip():
             return None

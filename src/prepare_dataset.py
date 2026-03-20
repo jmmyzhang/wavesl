@@ -4,16 +4,16 @@ Utility script to prepare ASL dataset for training.
 Helps organize video files and create class mappings.
 """
 
+import argparse
 import json
 from pathlib import Path
-from typing import List, Optional
-import argparse
+from typing import Optional
 
 
 def organize_dataset(
     source_dir: str,
     output_dir: str,
-    class_names: Optional[List[str]] = None,
+    class_names: Optional[list[str]] = None,
 ) -> None:
     """
     Organize video files into class directories.
